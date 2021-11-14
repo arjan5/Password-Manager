@@ -218,6 +218,7 @@ class Login(QDialog):
 
         self.password = QLineEdit()
         self.password.setPlaceholderText('Password')
+        self.password.setEchoMode(QLineEdit.EchoMode.Password)
 
         self.login_btn = QPushButton("Login")
         self.login_btn.clicked.connect(self.handleLogin)
@@ -238,35 +239,41 @@ class Login(QDialog):
         if self.checkDB():
             print('check user')
             
-            user_db = self.conn.execute('''SELECT * FROM LOGIN WHERE COLUMN = user''')
-            print(user_db)
+            self.cur.execute("SELECT user FROM LOGIN")
+            user_db = self.cur.fetchone()[0]
 
-            pass_salt = self.conn.execute('''SELECT * FROM LOGIN WHERE COLUMN = salt''')
-            pass_db = self.conn.execute('''SELECT * FROM LOGIN WHERE COLUMN = password''')
-            self.hashed_password_input = bcrypt.hashpw(password.encode('utf-8'), pass_salt)
+            pass_db = self.cur.execute("SELECT password FROM LOGIN").fetchone()[0].encode('utf-8')
+            print(pass_db)
             
-            if bcrypt.checkpw(bcrypt.hashpw(password.encode(), pass_salt), pass_db) and user == user_db:
+            if bcrypt.checkpw(password.encode('utf-8'), pass_db) and user == user_db:
                 print('success')
 
                 self.accept()
 
         else:
+            print('New DB')
+
             pass_salt = bcrypt.gensalt()
-            self.conn.execute('''INSERT INTO LOGIN (user, password, salt) VALUES ({}, {}, {})'''.format(user, password ,pass_salt))
+            hashpw = bcrypt.hashpw(password.encode('utf-8'), pass_salt).decode('utf-8')
+
+            self.cur.execute('INSERT INTO LOGIN (user, password) VALUES ("{}", "{}")'.format(user, hashpw))
+            self.conn.commit()
+
+            self.accept()
 
 
     def checkDB(self):
 
         self.conn = sqlite3.connect('login.db')
-        print('Connected Successfully')
+        self.cur = self.conn.cursor()
+        print('Connected to Login DB Successfully')
 
-        check = self.conn.execute('''SELECT count(name) FROM sqlite_master WHERE type='table' AND name='LOGIN' ''').fetchone()[0]
+        check = self.cur.execute("SELECT count(name) FROM sqlite_master WHERE type='table' AND name='LOGIN'").fetchone()[0]
         if check == 0:
             self.conn.execute('''CREATE TABLE LOGIN
-                (ID INT PRIMARY KEY     NOT NULL,
+                (ID INTEGER PRIMARY KEY AUTOINCREMENT,
                 user     TEXT,
-                password       TEXT,
-                salt    TEXT);''')
+                password       TEXT);''')
 
             return 0
 
