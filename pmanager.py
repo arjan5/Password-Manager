@@ -1,11 +1,14 @@
-import sqlite3, bcrypt
-import hashlib
-from Crypto import Random
-from Crypto.Cipher import AES
-from base64 import b64encode, b64decode
-import sys
+import sqlite3, sys
 from PyQt6.QtGui import *
 from PyQt6.QtWidgets import *
+from PyQt6.QtCore import *
+import secrets, bcrypt
+from base64 import urlsafe_b64encode as b64e, urlsafe_b64decode as b64d
+from cryptography.fernet import Fernet
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
 
 class Window(QWidget):
     def __init__(self):
@@ -13,6 +16,8 @@ class Window(QWidget):
         super().__init__()
 
         self.connectToDatabase()
+        self.backend = default_backend()
+        self.iterations = 100_000
 
         self.menu_widget = QListWidget()
         self.menu_widget.itemSelectionChanged.connect(self.selectionChanged)
@@ -166,58 +171,120 @@ class Window(QWidget):
         print('delete')
 
 
-class AESCipher(object):
-    
-    def __init__(self, key):
-        self.block_size = AES.block_size
-        self.key = hashlib.sha256(key.encode()).digest()
-        self.encrypted = ''
+    def _derive_key(self, password: bytes, salt: bytes, iterations: int = None) -> bytes:
+        #Derive a secret key from a given password and salt
+        if iterations is None:
+            iterations = self.iterations
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(), length=32, salt=salt,
+            iterations=iterations, backend=self.backend)
+        return b64e(kdf.derive(password))
 
 
-    def getEnc(self):
-        return self.encrypted
+    def password_encrypt(self, message: bytes, password: str, iterations: int = None) -> bytes:
+        if iterations is None:
+            iterations = self.iterations
+        salt = secrets.token_bytes(16)
+        key = self._derive_key(password.encode(), salt, iterations)
+        return b64e(
+            b'%b%b%b' % (
+                salt,
+                iterations.to_bytes(4, 'big'),
+                b64d(Fernet(key).encrypt(message)),
+            )
+        )
 
 
-    def __pad(self, plain_text):
-        num_of_bytes_to_pad = self.block_size - len(plain_text) % self.block_size
-        ascii_string = chr(num_of_bytes_to_pad)
-        padding_str = num_of_bytes_to_pad * ascii_string
-        padded_plain_text = plain_text + padding_str
-        return padded_plain_text
+    def password_decrypt(self, token: bytes, password: str) -> bytes:
+        decoded = b64d(token)
+        salt, iter, token = decoded[:16], decoded[16:20], b64e(decoded[20:])
+        iterations = int.from_bytes(iter, 'big')
+        key = _derive_key(password.encode(), salt, iterations)
+        return Fernet(key).decrypt(token)
 
 
-    @staticmethod
-    def __unpad(plain_text):
-        last_char = plain_text[len(plain_text) - 1:]
-        bytes_to_remove = ord(last_char)
-        return plain_text[:-bytes_to_remove]
+class Login(QDialog):
+
+    def __init__(self):
+        super().__init__()
+
+        self.initUI()
 
 
-    def encrypt(self, plain_text):
-        plain_text = self.__pad(plain_text)
-        iv = Random.new().read(self.block_size)
-        cipher = AES.new(self.key, AES.MODE_CBC, iv)
-        encrypted_text = cipher.encrypt(plain_text.encode())
-        self.encrypted = b64encode(iv + encrypted_text).decode("utf-8")
-        return self.encrypted
+    def initUI(self):
+
+        self.user = QLineEdit()
+        self.user.setPlaceholderText('Username')
+
+        self.password = QLineEdit()
+        self.password.setPlaceholderText('Password')
+
+        self.login_btn = QPushButton("Login")
+        self.login_btn.clicked.connect(self.handleLogin)
+
+        self.setWindowTitle("Login Window")
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.user)
+        layout.addWidget(self.password)
+        layout.addWidget(self.login_btn)
 
 
-    def decrypt(self, encrypted_text):
-        encrypted_text = b64decode(encrypted_text)
-        iv = encrypted_text[:self.block_size]
-        cipher = AES.new(self.key, AES.MODE_CBC, iv)
-        plain_text = cipher.decrypt(encrypted_text[self.block_size:]).decode("utf-8")
-        return self.__unpad(plain_text)
+    def handleLogin(self):
 
+        user = self.user.text()
+        password = self.password.text()
+
+        if self.checkDB():
+            print('check user')
+            
+            user_db = self.conn.execute('''SELECT * FROM LOGIN WHERE COLUMN = user''')
+            print(user_db)
+
+            pass_salt = self.conn.execute('''SELECT * FROM LOGIN WHERE COLUMN = salt''')
+            pass_db = self.conn.execute('''SELECT * FROM LOGIN WHERE COLUMN = password''')
+            self.hashed_password_input = bcrypt.hashpw(password.encode('utf-8'), pass_salt)
+            
+            if bcrypt.checkpw(bcrypt.hashpw(password.encode(), pass_salt), pass_db) and user == user_db:
+                print('success')
+
+                self.accept()
+
+        else:
+            pass_salt = bcrypt.gensalt()
+            self.conn.execute('''INSERT INTO LOGIN (user, password, salt) VALUES ({}, {}, {})'''.format(user, password ,pass_salt))
+
+
+    def checkDB(self):
+
+        self.conn = sqlite3.connect('login.db')
+        print('Connected Successfully')
+
+        check = self.conn.execute('''SELECT count(name) FROM sqlite_master WHERE type='table' AND name='LOGIN' ''').fetchone()[0]
+        if check == 0:
+            self.conn.execute('''CREATE TABLE LOGIN
+                (ID INT PRIMARY KEY     NOT NULL,
+                user     TEXT,
+                password       TEXT,
+                salt    TEXT);''')
+
+            return 0
+
+        elif check == 1:
+            return 1
 
 
 if __name__ == "__main__":
-    app = QApplication([])
-    window = Window()
-    window.show()
+    app = QApplication(sys.argv)
+    login = Login()
 
-    with open("style.qss", "r") as f:
-        style = f.read()
-        app.setStyleSheet(style)
+    if login.exec():
+        print('in')
+        window = Window()
+        window.show()
 
-    sys.exit(app.exec())
+        with open("style.qss", "r") as f:
+            style = f.read()
+            app.setStyleSheet(style)
+
+        sys.exit(app.exec())
