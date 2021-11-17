@@ -4,10 +4,10 @@ from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 import secrets, bcrypt
 from base64 import urlsafe_b64encode as b64e, urlsafe_b64decode as b64d
-from cryptography.fernet import Fernet
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+# from cryptography.fernet import Fernet
+# from cryptography.hazmat.backends import default_backend
+# from cryptography.hazmat.primitives import hashes
+# from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 
 class Window(QWidget):
@@ -233,29 +233,39 @@ class Login(QDialog):
 
     def handleLogin(self):
 
+        # Get the users login and password from the dialog
         user = self.user.text()
         password = self.password.text()
 
         if self.checkDB():
             print('check user')
             
+            # Fetch the users stored in the table
             self.cur.execute("SELECT user FROM LOGIN")
+            # Get the first one as I only have one user - myself
             user_db = self.cur.fetchone()[0]
 
+            # Fetch the hashed password from the table
             pass_db = self.cur.execute("SELECT password FROM LOGIN").fetchone()[0].encode('utf-8')
             print(pass_db)
             
+            # Encode the inputted password using utf-8 and compare it to the stored hash using bcrypt
+            # If the hash matches and the user does, the dialog is accepted
             if bcrypt.checkpw(password.encode('utf-8'), pass_db) and user == user_db:
                 print('success')
 
                 self.accept()
 
         else:
+            # Table does not exist, therefore checkDB() created one. New user (myself) is inserted into the table
             print('New DB')
 
+            # Generate a salt for the hash
             pass_salt = bcrypt.gensalt()
+            # Hash the password using the salt and decode it, as it will be stored as a string for later reference
             hashpw = bcrypt.hashpw(password.encode('utf-8'), pass_salt).decode('utf-8')
 
+            # Insert the user and hash into the table
             self.cur.execute('INSERT INTO LOGIN (user, password) VALUES ("{}", "{}")'.format(user, hashpw))
             self.conn.commit()
 
@@ -263,11 +273,14 @@ class Login(QDialog):
 
 
     def checkDB(self):
-
+        # Connect to the database
+        # Need to find a secure way to ensure the database is not just a random DB called login.db
         self.conn = sqlite3.connect('login.db')
+        # Create cursor object to allow data access in database
         self.cur = self.conn.cursor()
         print('Connected to Login DB Successfully')
 
+        # Check if the table already exists in the database, if so then return true, else create a table
         check = self.cur.execute("SELECT count(name) FROM sqlite_master WHERE type='table' AND name='LOGIN'").fetchone()[0]
         if check == 0:
             self.conn.execute('''CREATE TABLE LOGIN
@@ -283,13 +296,16 @@ class Login(QDialog):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    # Dialog to retrueve login details
     login = Login()
 
+    # If the login details are accepted then continue to run the mainwindow
     if login.exec():
         print('in')
         window = Window()
         window.show()
 
+        # Stylesheet for the GUI
         with open("style.qss", "r") as f:
             style = f.read()
             app.setStyleSheet(style)
